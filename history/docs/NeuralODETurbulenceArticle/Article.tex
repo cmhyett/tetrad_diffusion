@@ -1,0 +1,155 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+% Article
+% Latex Template
+% 
+% Author: Criston Hyett
+% 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+
+\documentclass{amsart}
+\usepackage{graphicx}
+\usepackage[margin=1.0in]{geometry}
+\usepackage{abstract}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\ceil}[1]{\lceil#1\rceil}
+\newcommand{\ov}{\overline}
+\newcommand{\cleq}{\preccurlyeq}
+\newcommand{\cgeq}{\succcurlyeq}
+\newcommand{\bdy}{\textbf{\text{Bdy}}}
+\newcommand{\trace}{\text{trace}}
+\newcommand{\dom}{\textbf{dom}}
+
+\renewcommand{\labelenumi}{\roman{enumi})}
+
+\begin{document}
+
+\title{Neural ODE's and Turbulence}
+\author{Criston Hyett}
+\author{Misha Chertkov}
+
+\maketitle
+
+\begin{abstract}
+  The seminal work by Chen et. al. displayed a new methodology of Neural ODE's that can effectively and efficiently model dynamical systems\cite{Chen2018}. Here, we explore this methodology and its ability to learn so-called Tetrad Dynamics\cite{Chertkov1999}. On top of this springboard, we also investigate the effect of integratting neural ODE's with other methodologies; physics-informed neural networks (PINNs) and so-called Universal ODEs (a neural ODE with some modeling knowledge built in). We show the ability to reproduce some results from \cite{Chen2018} in a fluid mechanics context, and lay the groundwork to move into the learning of reduced models for turbulent flow.
+\end{abstract}
+\vspace{0.5in}
+\section{Introduction}
+As discussed in the Neural ODE paper\cite{Chen2018}, one can think of recurrent/residual neural networks as a Forward Euler discretization of continuous dynamics, where the state at hidden layer $i+1$ is defined by 
+\[
+  x_{i+1} = x_i + f(x_i,\theta_i)
+\]
+Extending this idea to when the step-size tends to zero, and the number of hidden layers tends to infinity, we recover the idea of a differential equation,
+\[
+  \frac{dx}{dt} = f(x,\theta)
+\]
+where the state at a hidden ``layer'' $t$ is given by
+\[
+  x(t) = \int_{t_0}^t f(x(t),\theta)dt
+\]
+and output of the network is defined by solving the differential equation. In our work, the right hand side $f(x,\theta)$, will be a dense neural network (architecture described in section \ref{sec:learningTetrad}). We are interested in this neural ODE methodology primarily for two reasons:
+\begin{enumerate}
+\item Efficiency in calculation. A result by Pontriagin\cite{pontriagin1962} demonstrates the ability to perform sensitivity analysis in the same cost as solving the defined ODE. In addition, the transition into ODEs allows us to leverage the decades of development of efficient and stable ODE solvers, providing guarantees of accuracy and computational cost.
+\item Ability for the learned NN to encode not just information about the data in question, but importantly, its structure. This refocus from learning the data to learning the ODE governing it opens doors to more stable extrapolation of dynamical systems, and - as we'll see in the case of universal ODE's - interpretability of the network.
+\end{enumerate}
+
+\indent In this paper, we apply Neural ODE's to tetrad dynamics, a phenomenlogical model of turbulence that attempts describe the statistical geometry of turbulent flows(\cite{Chertkov1999}). Here we will be restricted to learning the ``pure'' model, as a stepping stone to future work in data-based model discovery of reduced models of turbulence.
+
+\section{Neural ODEs}
+%In this section, I'd like to expound upon the reasons given in the introduction, giving more reasoning, perhaps examples? Discuss work done in Julia that makes it aptly suited to this work.
+Since the Neural ODE publication by Chen, et.al., the work has recieved considerable attention. Much of science is concerned with spatio-temporal data, exhibited by the ubiquity of ordinary and partial differential equations. Combining this seemingly natural representation of time-series data with the efficiency improvements mentioned above, as well as the additional structure encoded into the trained network, results in a promising methodology for scientific study. We will spend this section discussing in more detail the stated reasons this methodology seemed to be a good fit for our problem.\newline
+\indent For context, let us consider an example neural ode, that is where the predictions $y(t)$ are given by the solution of the ODE
+\begin{equation}
+  \frac{dy}{dt} = f(x,\theta)
+\end{equation}
+and where $f$ is a neural network of some architecture. Our goal will be to optimize a loss function $L:\R^n \to \R$ (perhaps MSE between prediction and training data).         \newline
+\indent It is known that a computationally efficient way to perform sensitivity analysis of a feed-forward network is through what is called ``automatic differentiation'', where the network has a corresponding system of equations which consumes the intermediate calculations of the network, and calculates the gradient with respect to the parameters. Thus, for efficient computation, one must have these intermediate results on-hand, requiring the storage of these intermediate calculations on the forward pass. For very deep networks, this can result in the need for large stores of memory, resulting in a computational bottleneck. Neural ODE's however, are able to perform sensitivity analysis using by solving an adjoint ODE\cite{pontriagin1962}. This allows us to calculate the gradient of the neural ODE w.r.t. the parameters in a computationally efficient manner.\newline
+% \indent To make this idea more concrete, suppose we are attempting to learn data using the above neural ode. The input to this loss function will be the solution to the neural ode $y(t)$, sampled on some subset. That is, let $\theta$ be the parameters defining the neural network $f$, so that finding the gradient of the loss function with respect to the parameters $\theta$ is an application of the chain rule:
+% \begin{equation}
+%   \frac{dL}{d\theta} = \frac{dL}{dy}\frac{dy}{d\theta}  L(solve(y(t_0),f,tspan))
+% \end{equation}
+%   \newline
+\indent The phenomena of better fitting to noisy, unevenly spaced data, as well as better extrapolation is really a question of what underlies the data. In many scientific applications, one believes that there is at least a component of the dynamics that are governed by differential equations (here we're concerned with ODEs, but with a bit more work these ideas can be extended to PDEs and SDEs, although the details of senstivity analysis seem to be delicate), so that fitting the derivative instead of the noisy data itself unsurprisingly has a much better chance of finding the local minimum in the functional space.
+
+\section{Tetrad Dynamics}
+The eventual goal of our effort is to use DNS data and NODEs to learn reduced models for hydrodynamic turbulence, and thus allow us to learn and hypothesize models governing the statistical geometry of turbulent flows. As a first step in this direction, we attempt to learn the Tetrad Model, put forward by Chertkov et.al. This model considers the time evolution of a coherent volume of fluid, $\Gamma$, parameterized by four points, or a triad of vectors upon elimination of the center of mass. We can combine these vectors to obtain the inertial tensor $\rho$. As we are concerned with a volume of fluid the velocity gradient tensor we are interested in is the course-grained (on the scale of $\Gamma$), $\hat M$. Then we can describe the evolution of the tetrad according to the course-grained velocity gradient tensor
+\begin{equation}
+  \frac{d}{dt}\hat \rho = \hat M^T\hat \rho
+\end{equation}
+Finally, the evolution of $\hat M$ is given by
+\begin{equation}
+  \frac{d}{dt}\hat M = -\hat M^2 + \hat \Pi \cdot \trace(\hat M^2)\label{eq:Mhat}
+\end{equation}
+where $\hat \Pi$ is a measure of local anisotropy,
+\begin{equation}
+  \hat \Pi = \frac{\left(\hat\rho^{-1}\right)^T \left(\hat\rho^{-1}\right)}{\trace\left[\left(\hat\rho^{-1}\right)\left(\hat\rho^{-1}\right)^\dagger\right]}
+\end{equation}
+\indent While there are plenty of things I don't yet understand (regarding equation \ref{eq:Mhat} in particular) I'll discuss briefly why this is a good model to start with in our attempt to learn the statistical geometry of hydrodynamic turbulence. First, it is a plausible model, with significant analysis to suggest it exhibits desirable physical properties. Further, the inclusion of this tetrad geometry defined by a given scale, allows one to probe different inertial ranges of interest.
+\section{Learning Tetrad Dynamics}\label{sec:learningTetrad}
+% Talk here about learning Vielfosse dynamics, how it is a first step, simpler task to the more involved question of learning tetrad dynamics. Discuss the methods used, including choice of solvers, NN architecture, etc. Discuss success, failures of the learned network, and how these lessons learned will assist in scaling the methodology to learning tetrad dynamics.
+In this section I'll discuss our attempts, challenges and successes, as a means of informing future endeavors in this direction. One of the first decisions we made was to begin with the study of the so-called Vielfosse dynamics\cite{cantwell1992}, a simpler system intended to model the evolution of the local velocity gradient $\hat m$, given by
+\begin{equation}
+  \frac{d}{dt} \hat m = -\hat m^2 + \frac{\trace(\hat m^2)}{3}\hat I
+\end{equation}
+This system is not as interesting physically, as it has been shown to lead to finite-time singularities. However, it does retain much of the form of the interested tetrad dynamics, and it has easily identifiable dynamics in order to debug the code. In particular, in figure (\ref{fig:vielfosseDynamics}) we plot the evolution of invariants of the velocity gradient tensor\cite{cantwell1992}
+\begin{equation}
+  Q = -\frac{1}{2}\trace\left(\hat m^2\right) \qquad R = -\frac{1}{3}\trace\left(\hat m^3\right)
+\end{equation}
+
+\begin{figure}%
+  \centering
+  \includegraphics[scale = 0.5]{../vielfosseDynamics.png}
+  \caption{The lines show trajectories of invariants $Q,R$ of the velocity gradient tensor.}
+  \label{fig:vielfosseDynamics}
+\end{figure}
+
+\indent Again, as a first step, we attempt to learn the ``pure'' model, and as shown in listing(\ref{lst:vielfosseLearning}), we generate data by solving this ODE forward and saving at some set of points (recall that when moving to DNS data, this training data will be extracted by coarse-graining the real DNS data). We then construct a 5-layer dense network with 50 nodes per layer. We use the Tsit5() solver to propogate through the network, (as well as solve the pure ODE) as it is quite fast and accurate. I found through experimentation that the choice of solver had enormous impact on performance, (profiling the code suggested most of the cycles were spent in the calculation of the adjoint equation, a result I still don't understand). The remaining details are handled largely in the background of the packages, though it should be noted I used the ADAM optimization routine (a variant of SGD) for training the network, and the mean-squared error for the loss function, though we will discuss more interesting possible choices below.\newline
+\indent We obtained fairly nice results, reproducing the dynamics of the invariants as shown in figure(\ref{fig:learnedVielfosse}). These dynamics are evolved over an extremely short timespan - reflective of how the network was trained. Looking at figure(\ref{fig:vielfosseDynamics}), we see that the invariants can evolve quite differently depending on the location of the initial position in the Q-R plane. In particular, the evolution above and below the asymptotic solution are drastically different, and the relative ``velocities'' of trajectories vary throughout the plane. Thus, to give our network the best chance of success, we exposed it to a wide range of initial conditions, (in the results displayed, 200 randomly chosen matrices $\hat m_0$), but to keep computational time limited, we only evolved these trajectories for a very short period of time.\newline
+\indent In the Neural ODE paper, the authors discussed the so-called ``latent ODE'', present in the network after learning. Here we were able to recreate this phenomena, as we saw qualitative agreement of invariant trajectories evolved 30 times longer than the trained data, even when testing against data never seen by the network. This result is a very strong indicator of the power of learning the underlying ODE for scientific modeling, it is shown in figure(\ref{fig:extrapolatedVielfosse}).
+
+\begin{figure}%
+  \centering
+  \includegraphics[scale = 0.25]{../learnedVielfosse.png}
+  \caption{The 'X's show the true trajectories of invariants $Q,R$ of the velocity gradient tensor, while the overlaid solid lines show the NODE predicted dynamics.}
+  \label{fig:learnedVielfosse}
+\end{figure}
+
+\begin{figure}%
+  \centering
+  \includegraphics[scale = 0.25]{../extrapolatedVielfosse.png}
+  \caption{The 'X's show the true trajectories of invariants $Q,R$ of the velocity gradient tensor, while the overlaid solid lines show the NODE predicted dynamics. The test data is randomly chosen, so the NODE has never seen these initial conditions, and we evolve 30 times longer than the trained timespan. The qualitative agreement shows the predictive power of neural ode's.}
+  \label{fig:extrapolatedVielfosse}
+\end{figure}
+
+
+\section{Conclusion}
+In this work we applied the novel methodology of Neural ODEs to the old problem of a statistical discription of the geometry of hydrodynamic turbulence. We were able to learn a relatively simple pure model, showing the expressive and predictive power of neural ODEs, while laying the groundwork for future work in this arena.
+
+\section{Future Work}
+% Discuss how we use this work to move into directions such as PINNs, Universal ODEs, others, and the broader picture of data-based model discovery.
+While most of this project centered around learning a simplified, pure ODE, it is important to view this effort in the broader context of learning statistical descriptions of turbulence. First, moving from learning this model to learning the full tetrad dynamics is a matter of applying more computational horsepower to a proven methodology. Once proven to learn this full tetrad model, one can move into learning real DNS data. \newline
+\indent In the approach to real data, it is likely that our network will need additional assistance finding an accurate and general enough representation of the (now 18 dimensional) ODE. This can be provided using the ideas of physics-informed neural networks, placing physical constraints in the loss function as demonstrated by Raissi and collaborators\cite{raissiPINNs2019}. An alternative, and exciting approach is to hypothesize some structure of the ODE, and allow the neural network to learn whatever else is needed to ensure agreement to the training data.\newline
+\indent In the much broader picture, this work is the foundation of an exploration into data-driven model discovery and hypothesis testing using the power and expressability of neural networks.
+
+\newpage
+\section{Appendix}
+
+\subsection{Code}\label{subsec:Code}
+\subsubsection{Learning Vielfosse Dynamics}\label{lst:vielfosseLearning}
+\hfill{}
+\lstinputlisting{../vielfosseLearning.jl}
+
+
+\newpage
+\bibliography{./Bib/neural,./Bib/tetrad}
+\bibliographystyle{plain}
+
+\end{document}
